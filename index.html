@@ -148,6 +148,11 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:'Nunito',sans-serif
       <button class="bn-btn" onclick="setTab('games')">🎮 Games</button>
       <button class="bn-btn" onclick="setTab('world')">🗺️ Walk</button>
     </div>
+    <!-- Joystick -->
+    <div id="joystick" style="position:absolute;bottom:80px;left:16px;width:90px;height:90px;z-index:20">
+      <div id="joyBase" style="width:90px;height:90px;border-radius:50%;background:rgba(0,0,0,0.3);border:3px solid rgba(255,255,255,0.4);position:absolute"></div>
+      <div id="joyStick" style="width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,0.7);border:3px solid rgba(61,26,92,0.6);position:absolute;top:26px;left:26px;touch-action:none"></div>
+    </div>
   </div>
 
   <!-- RIGHT PANEL -->
@@ -187,8 +192,16 @@ const G={
   pet:'bunny',petName:'Fluffy',
   owned:['none','happy'],items:[],
   scene:'garden',nearNPC:null,chatNPC:null,
-  indoor:null, // which building we're inside
-  transition:0, // fade transition 0-1
+  indoor:null,
+  transition:0,
+  // Walking system
+  ax:0.5, ay:0.75,        // avatar position (0-1 of world)
+  tx:0.5, ty:0.75,        // target position (tap-to-walk)
+  walkFrame:0,             // animation frame
+  facing:'down',           // up/down/left/right
+  isWalking:false,
+  camX:0, camY:0,          // camera offset in world pixels
+  worldW:1400, worldH:900, // scrollable world size
 };
 
 // Buildings on the garden scene (positions as % of W/H)
@@ -293,6 +306,7 @@ function lt(hex,a=40){const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3
 
 // ── DRAW SCENE BACKGROUNDS ────────────────────────────────
 function drawGarden(){
+  const W=G.worldW, H=G.worldH;
   // Sky gradient
   const sky=ctx.createLinearGradient(0,0,0,H*.55);
   sky.addColorStop(0,'#B3E5FC');sky.addColorStop(1,'#E8F5FF');
@@ -394,6 +408,7 @@ function drawGarden(){
 }
 
 function drawBeach(){
+  const W=G.worldW, H=G.worldH;
   const sky=ctx.createLinearGradient(0,0,0,H*.5);
   sky.addColorStop(0,'#38BDF8');sky.addColorStop(1,'#7DD3FC');
   ctx.fillStyle=sky;ctx.fillRect(0,0,W,H*.5);
@@ -410,6 +425,7 @@ function drawBeach(){
 }
 
 function drawNight(){
+  const W=G.worldW, H=G.worldH;
   const sky=ctx.createLinearGradient(0,0,0,H*.6);
   sky.addColorStop(0,'#0F0A1E');sky.addColorStop(1,'#1E1040');
   ctx.fillStyle=sky;ctx.fillRect(0,0,W,H*.6);
@@ -590,8 +606,20 @@ function drawAvatar(x,y,sc,st){
   ctx.fillStyle=nail;ctx.save();ctx.translate(-46,68);ctx.rotate(-.22);[-4,-1,2,5].forEach(nx=>{ctx.beginPath();ctx.ellipse(nx,59,3,4,0,0,Math.PI*2);ctx.fill();});ctx.restore();
   ctx.save();ctx.translate(46,68);ctx.rotate(.22);[-4,-1,2,5].forEach(nx=>{ctx.beginPath();ctx.ellipse(nx,59,3,4,0,0,Math.PI*2);ctx.fill();});ctx.restore();
 
+  // LEGS with walk animation
+  const walkSwing = st.moving ? Math.sin((st.walkFrame||0)*0.25)*18 : 0;
+  ctx.fillStyle=shoe;ctx.strokeStyle='#3D1A5C';ctx.lineWidth=2;
+  // Left leg
+  ctx.save();ctx.translate(-18,140);ctx.rotate(walkSwing*Math.PI/180);
+  ctx.fillStyle=shoe;ctx.beginPath();ctx.roundRect(-8,0,16,50,4);ctx.fill();ctx.stroke();ctx.restore();
+  // Right leg
+  ctx.save();ctx.translate(18,140);ctx.rotate(-walkSwing*Math.PI/180);
+  ctx.fillStyle=shoe;ctx.beginPath();ctx.roundRect(-8,0,16,50,4);ctx.fill();ctx.stroke();ctx.restore();
+
   // SHOES
   ctx.fillStyle=shoe;ctx.strokeStyle='#3D1A5C';ctx.lineWidth=2;
+  const legL = walkSwing*Math.PI/180;
+  const legR = -walkSwing*Math.PI/180;
   const sh=st.shoe||'heels';
   if(sh==='heels'){
     ctx.beginPath();ctx.moveTo(-58,198);ctx.lineTo(-20,198);ctx.lineTo(-20,210);ctx.lineTo(-42,210);ctx.bezierCurveTo(-54,210,-58,205,-58,198);ctx.fill();ctx.stroke();
@@ -752,104 +780,26 @@ const SCENE_COINS=[];
 function spawnSceneCoins(){SCENE_COINS.length=0;for(let i=0;i<8;i++)SCENE_COINS.push({x:.1+Math.random()*.8,y:.55+Math.random()*.35,col:false});}
 spawnSceneCoins();
 
-// ── MAIN DRAW ────────────────────────────────────────────
-let frame=0;
-function draw(){
-  frame++;
-  const t=Date.now()/600;
-  ctx.clearRect(0,0,W,H);
+// ── WALKING SYSTEM ───────────────────────────────────────
+const keys={};
+window.addEventListener('keydown',e=>{
+  keys[e.key]=true;
+  e.preventDefault && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key) && e.preventDefault();
+});
+window.addEventListener('keyup',e=>{keys[e.key]=false;});
 
-  if(G.indoor){
-    // ── INDOOR MODE ──
-    const bld=BUILDINGS.find(b=>b.id===G.indoor);
-    if(bld) drawIndoor(bld);
-    // Avatar inside (smaller, near bottom center)
-    drawAvatar(W*.42,H*.88,.75,G);
-    // Pet inside
-    const petFn=PETS[G.pet||'bunny']?.draw||drawBunny;
-    petFn(ctx,W*.25,H*.85,.55,t);
-    // Transition
-    if(G.transition>0){ctx.fillStyle=`rgba(0,0,0,${G.transition})`;ctx.fillRect(0,0,W,H);}
-  } else {
-    // ── OUTDOOR MODE ──
-    if(G.scene==='garden') drawGarden();
-    else if(G.scene==='beach') drawBeach();
-    else drawNight();
-
-    // Building proximity check
-    G.nearBuilding=null;
-    BUILDINGS.forEach(b=>{
-      const bx=b.x*W+b.w*W/2, by=b.y*H+b.h*H*.8;
-      const avX=W*.42, avY=H*.75;
-      if(Math.hypot(bx-avX,by-avY)<W*.12) G.nearBuilding=b.id;
-    });
-
-    // Scene coins
-    SCENE_COINS.forEach((c,i)=>{
-      if(c.col)return;
-      const cx2=c.x*W,cy2=c.y*H,bob=Math.sin(t*1.5+i)*5;
-      ctx.save();ctx.translate(cx2,cy2+bob);
-      ctx.fillStyle='#FFD700';ctx.strokeStyle='#3D1A5C';ctx.lineWidth=2;
-      ctx.beginPath();ctx.arc(0,0,11,0,Math.PI*2);ctx.fill();ctx.stroke();
-      ctx.fillStyle='#FFA500';ctx.font='bold 11px serif';ctx.textAlign='center';ctx.fillText('🪙',0,4);
-      ctx.restore();
-    });
-
-    // NPCs in scene
-    NPCS.forEach(npc=>{
-      const nx=npc.x*W,ny=npc.y*H,bob=Math.sin(t+npc.x*5)*6;
-      ctx.save();ctx.translate(nx,ny+bob);
-      ctx.fillStyle=npc.id==='zara'?'#A855F7':npc.id==='fox'?'#FB923C':'#FF6B9D';
-      ctx.strokeStyle='#3D1A5C';ctx.lineWidth=2;
-      ctx.beginPath();ctx.ellipse(0,16,20,26,0,0,Math.PI*2);ctx.fill();ctx.stroke();
-      ctx.font='30px serif';ctx.textAlign='center';ctx.fillText(npc.icon,0,0);
-      const lw=ctx.measureText(npc.name).width+16;
-      ctx.fillStyle='white';ctx.beginPath();ctx.roundRect(-lw/2,-44,lw,20,8);ctx.fill();
-      ctx.strokeStyle='#3D1A5C';ctx.lineWidth=1.5;ctx.stroke();
-      ctx.fillStyle='#3D1A5C';ctx.font='bold 11px Nunito';ctx.textAlign='center';ctx.fillText(npc.name,-1,-30);
-      if(G.nearNPC===npc.id){ctx.fillStyle='#FFD700';ctx.font='bold 12px Nunito';ctx.fillText('Tap to chat!',0,-58);}
-      ctx.restore();
-    });
-
-    // Pet
-    const petFn=PETS[G.pet||'bunny']?.draw||drawBunny;
-    const petX=W*.22,petY=H*.82;
-    petFn(ctx,petX,petY,.7,t);
-
-    // Avatar (big, centered-left)
-    const avX=W*.42,avY=H*.88;
-    drawAvatar(avX,avY,.95,G);
-
-    // NPC proximity check
-    G.nearNPC=null;
-    NPCS.forEach(npc=>{const dx=(npc.x*W-W*.42),dy=(npc.y*H-H*.82);if(Math.hypot(dx,dy)<W*.18)G.nearNPC=npc.id;});
-
-    // Transition overlay
-    if(G.transition>0){ctx.fillStyle=`rgba(0,0,0,${G.transition})`;ctx.fillRect(0,0,W,H);}
-  }
-
-  requestAnimationFrame(draw);
-}
-draw();
-
-// ── SCENE CLICK ───────────────────────────────────────────
+// Tap to walk
 canvas.addEventListener('click',e=>{
-  const rect=canvas.getBoundingClientRect();
-  const mx=(e.clientX-rect.left)/rect.width;
-  const my=(e.clientY-rect.top)/rect.height;
-
   if(G.indoor){
-    // ── INDOOR CLICKS ──
+    const rect=canvas.getBoundingClientRect();
+    const scaleX=W/(rect.right-rect.left), scaleY=H/(rect.bottom-rect.top);
+    const cx=(e.clientX-rect.left)*scaleX, cy=(e.clientY-rect.top)*scaleY;
+    const mx=cx/W, my=cy/H;
     const bld=BUILDINGS.find(b=>b.id===G.indoor);
-    if(!bld)return;
+    if(!bld) return;
     const rm=bld.interior;
-    // Exit door (bottom center ~43%-57% x, 78%-100% y)
     if(mx>.4&&mx<.6&&my>.75){enterBuilding(null);return;}
-    // NPC tap
-    if(rm.npc&&mx>.62&&mx<.88&&my>.45&&my<.72){
-      openIndoorChat(rm.npc,bld);return;
-    }
-    // Items
+    if(rm.npc&&mx>.62&&mx<.88&&my>.45&&my<.72){openIndoorChat(rm.npc,bld);return;}
     if(rm.isShop){openShop();return;}
     rm.items&&rm.items.forEach(item=>{
       if(Math.hypot(mx-item.x,my-item.y)<.1){
@@ -858,42 +808,223 @@ canvas.addEventListener('click',e=>{
           else if(item.action==='startMath')startMath();
           else if(item.action==='startColor')startColor();
         } else {
-          G.coins+=rm.coins||2;
-          document.getElementById('coinCount').textContent=G.coins;
-          spawnSparkle(item.x*W,item.y*H);
-          showToast((item.msg||'Found something! +2 🪙'));
+          G.coins+=rm.coins||2;document.getElementById('coinCount').textContent=G.coins;
+          spawnSparkle(item.x*W,item.y*H);showToast(item.msg||'Found something!');
         }
       }
     });
-  } else {
-    // ── OUTDOOR CLICKS ──
-    // Buildings — tap door area
+    return;
+  }
+  const rect=canvas.getBoundingClientRect();
+  const scaleX=W/(rect.right-rect.left);
+  const scaleY=H/(rect.bottom-rect.top);
+  const cx=(e.clientX-rect.left)*scaleX;
+  const cy=(e.clientY-rect.top)*scaleY;
+  // Convert canvas coords to world coords
+  const wx=(cx+G.camX)/G.worldW;
+  const wy=(cy+G.camY)/G.worldH;
+  G.tx=Math.max(0.02,Math.min(0.98,wx));
+  G.ty=Math.max(0.05,Math.min(0.95,wy));
+  G.isWalking=true;
+  // Check coin tap
+  SCENE_COINS.forEach((c,i)=>{
+    const cx2=c.x*G.worldW-G.camX, cy2=c.y*G.worldH-G.camY;
+    if(!c.col&&Math.hypot(cx-cx2,cy-cy2)<30){
+      c.col=true;G.coins+=5;document.getElementById('coinCount').textContent=G.coins;
+      spawnSparkle(cx2,cy2);showToast('+5 🪙');
+      setTimeout(()=>{c.x=.1+Math.random()*.8;c.y=.4+Math.random()*.45;c.col=false;},7000);
+    }
+  });
+  // Check NPC tap
+  NPCS.forEach(npc=>{
+    const nx=npc.x*G.worldW-G.camX, ny=npc.y*G.worldH-G.camY;
+    if(Math.hypot(cx-nx,cy-ny)<50) openChatFor(npc.id);
+  });
+  // Check building tap
+  BUILDINGS.forEach(b=>{
+    const bx=b.x*G.worldW-G.camX, by=b.y*G.worldH-G.camY;
+    const bw=b.w*G.worldW, bh=b.h*G.worldH;
+    if(cx>bx&&cx<bx+bw&&cy>by&&cy<by+bh) G.tx=b.x+b.w/2, G.ty=b.y+b.h*.9;
+  });
+});
+
+// Joystick setup
+let joyActive=false, joyDx=0, joyDy=0;
+const joyStick=document.getElementById('joyStick');
+const joyBase=document.getElementById('joyBase');
+function getJoyCenter(){
+  const r=joyBase.getBoundingClientRect();
+  return{x:r.left+r.width/2, y:r.top+r.height/2};
+}
+joyStick.addEventListener('pointerdown',e=>{
+  joyActive=true; joyStick.setPointerCapture(e.pointerId); e.preventDefault();
+});
+window.addEventListener('pointermove',e=>{
+  if(!joyActive)return;
+  const c=getJoyCenter();
+  const dx=e.clientX-c.x, dy=e.clientY-c.y;
+  const dist=Math.min(32,Math.hypot(dx,dy));
+  const angle=Math.atan2(dy,dx);
+  joyDx=Math.cos(angle)*(dist/32);
+  joyDy=Math.sin(angle)*(dist/32);
+  joyStick.style.left=(26+joyDx*26)+'px';
+  joyStick.style.top=(26+joyDy*26)+'px';
+});
+window.addEventListener('pointerup',()=>{
+  if(!joyActive)return;
+  joyActive=false; joyDx=0; joyDy=0;
+  joyStick.style.left='26px'; joyStick.style.top='26px';
+});
+
+function updateWalking(){
+  if(G.indoor) return;
+  const spd=0.003;
+  let dx=0, dy=0;
+  // Keyboard
+  if(keys['ArrowLeft']||keys['a']||keys['A']){dx=-spd;G.facing='left';}
+  if(keys['ArrowRight']||keys['d']||keys['D']){dx=spd;G.facing='right';}
+  if(keys['ArrowUp']||keys['w']||keys['W']){dy=-spd;G.facing='up';}
+  if(keys['ArrowDown']||keys['s']||keys['S']){dy=spd;G.facing='down';}
+  // Joystick
+  if(joyActive){
+    dx+=joyDx*spd; dy+=joyDy*spd;
+    if(Math.abs(joyDx)>Math.abs(joyDy)) G.facing=joyDx>0?'right':'left';
+    else if(Math.abs(joyDy)>0.1) G.facing=joyDy>0?'down':'up';
+  }
+  // Tap-to-walk
+  if(G.isWalking&&!joyActive&&dx===0&&dy===0){
+    const ddx=G.tx-G.ax, ddy=G.ty-G.ay;
+    const dist=Math.hypot(ddx,ddy);
+    if(dist>0.01){
+      dx=ddx/dist*spd; dy=ddy/dist*spd;
+      if(Math.abs(ddx)>Math.abs(ddy)) G.facing=ddx>0?'right':'left';
+      else G.facing=ddy>0?'down':'up';
+    } else {
+      G.isWalking=false;
+    }
+  }
+  if(dx!==0||dy!==0){
+    G.ax=Math.max(0.02,Math.min(0.98,G.ax+dx));
+    G.ay=Math.max(0.05,Math.min(0.95,G.ay+dy));
+    G.walkFrame++;
+    G.isWalking=true;
+  } else if(!joyActive) {
+    G.isWalking=false;
+  }
+  // Camera follows avatar — avatar stays center screen
+  const wW=G.worldW, wH=G.worldH;
+  const targetCamX=G.ax*wW - W/2;
+  const targetCamY=G.ay*wH - H/2;
+  G.camX=Math.max(0,Math.min(wW-W,targetCamX));
+  G.camY=Math.max(0,Math.min(wH-H,targetCamY));
+  // Building entry
+  if(!G.transitioning){
     BUILDINGS.forEach(b=>{
-      const bx=b.x,by=b.y,bw=b.w,bh=b.h;
-      const doorX=bx+bw*.38, doorW=bw*.24, doorY=by+bh*.6, doorH=bh*.4;
-      if(mx>doorX&&mx<doorX+doorW&&my>doorY&&my<doorY+doorH){
-        enterBuilding(b.id);return;
-      }
-      // Also tap whole building if near
-      if(G.nearBuilding===b.id&&mx>bx&&mx<bx+bw&&my>by&&my<by+bh){
-        enterBuilding(b.id);
-      }
-    });
-    // Coins
-    SCENE_COINS.forEach((c,i)=>{
-      if(!c.col&&Math.hypot(mx-c.x,my-c.y)<.05){
-        c.col=true;G.coins+=5;document.getElementById('coinCount').textContent=G.coins;
-        spawnSparkle(c.x*W,c.y*H);showToast('+5 🪙');
-        setTimeout(()=>{c.x=.1+Math.random()*.8;c.y=.55+Math.random()*.35;c.col=false;},7000);
-      }
-    });
-    // NPC
-    NPCS.forEach(npc=>{
-      const dx=mx-npc.x,dy=my-npc.y;
-      if(Math.hypot(dx,dy)<.1) openChatFor(npc.id);
+      const bCx=(b.x+b.w/2), bCy=(b.y+b.h*.85);
+      if(Math.hypot(G.ax-bCx,G.ay-bCy)<0.04) enterBuilding(b.id);
     });
   }
-});
+  // NPC proximity
+  G.nearNPC=null;
+  NPCS.forEach(npc=>{
+    if(Math.hypot(G.ax-npc.x,G.ay-npc.y)<0.08) G.nearNPC=npc.id;
+  });
+  // Coin pickup (auto when walking over)
+  SCENE_COINS.forEach((c,i)=>{
+    if(!c.col&&Math.hypot(G.ax-c.x,G.ay-c.y)<0.04){
+      c.col=true;G.coins+=5;document.getElementById('coinCount').textContent=G.coins;
+      spawnSparkle((c.x*G.worldW-G.camX),(c.y*G.worldH-G.camY));
+      showToast('+5 🪙');
+      setTimeout(()=>{c.x=.1+Math.random()*.8;c.y=.4+Math.random()*.45;c.col=false;},7000);
+    }
+  });
+}
+
+// ── MAIN DRAW ────────────────────────────────────────────
+let frame=0;
+function draw(){
+  frame++;
+  const t=Date.now()/600;
+  ctx.clearRect(0,0,W,H);
+  updateWalking();
+
+  if(G.indoor){
+    // ── INDOOR MODE ──
+    const bld=BUILDINGS.find(b=>b.id===G.indoor);
+    if(bld) drawIndoor(bld);
+    drawAvatar(W*.42,H*.88,.75,G);
+    const petFn=PETS[G.pet||'bunny']?.draw||drawBunny;
+    petFn(ctx,W*.26,H*.85,.52,t);
+    if(G.transition>0){ctx.fillStyle='rgba(0,0,0,'+G.transition+')';ctx.fillRect(0,0,W,H);}
+  } else {
+    // ── OUTDOOR MODE — draw world with camera offset ──
+    ctx.save();
+    ctx.translate(-G.camX,-G.camY);
+
+    // Draw background (big world)
+    if(G.scene==='garden') drawGarden();
+    else if(G.scene==='beach') drawBeach();
+    else drawNight();
+
+    // Scene coins
+    SCENE_COINS.forEach((c,i)=>{
+      if(c.col)return;
+      const cx2=c.x*G.worldW, cy2=c.y*G.worldH, bob=Math.sin(t*1.5+i)*5;
+      ctx.save();ctx.translate(cx2,cy2+bob);
+      ctx.fillStyle='#FFD700';ctx.strokeStyle='#3D1A5C';ctx.lineWidth=2;
+      ctx.beginPath();ctx.arc(0,0,11,0,Math.PI*2);ctx.fill();ctx.stroke();
+      ctx.font='bold 14px serif';ctx.textAlign='center';ctx.fillText('🪙',0,4);
+      ctx.restore();
+    });
+
+    // NPCs
+    NPCS.forEach(npc=>{
+      const nx=npc.x*G.worldW, ny=npc.y*G.worldH, bob=Math.sin(t+npc.x*5)*5;
+      ctx.save();ctx.translate(nx,ny+bob);
+      ctx.fillStyle=npc.id==='zara'?'#A855F7':npc.id==='fox'?'#FB923C':'#FF6B9D';
+      ctx.strokeStyle='#3D1A5C';ctx.lineWidth=2;
+      ctx.beginPath();ctx.ellipse(0,14,18,24,0,0,Math.PI*2);ctx.fill();ctx.stroke();
+      ctx.font='26px serif';ctx.textAlign='center';ctx.fillText(npc.icon,0,2);
+      const lw=ctx.measureText(npc.name).width+14;
+      ctx.fillStyle='white';ctx.beginPath();ctx.roundRect(-lw/2,-40,lw,18,7);ctx.fill();
+      ctx.strokeStyle='#3D1A5C';ctx.lineWidth=1.5;ctx.stroke();
+      ctx.fillStyle='#3D1A5C';ctx.font='bold 10px Nunito';ctx.textAlign='center';ctx.fillText(npc.name,0,-27);
+      if(G.nearNPC===npc.id){ctx.fillStyle='#FFD700';ctx.font='bold 11px Nunito';ctx.fillText('Tap to chat!',0,-52);}
+      ctx.restore();
+    });
+
+    // Pet follows avatar
+    const petFn=PETS[G.pet||'bunny']?.draw||drawBunny;
+    const petOffX = G.facing==='right'?-70:70;
+    petFn(ctx,G.ax*G.worldW+petOffX,G.ay*G.worldH-10,.55,t);
+
+    // Avatar with walk animation
+    const avWx=G.ax*G.worldW, avWy=G.ay*G.worldH;
+    const walkSt={...G, moving:G.isWalking, walkFrame:G.walkFrame};
+    drawAvatar(avWx,avWy,.75,walkSt);
+
+    // Near building highlight
+    BUILDINGS.forEach(b=>{
+      if(G.nearBuilding===b.id){
+        const bx=b.x*G.worldW,by=b.y*G.worldH,bw=b.w*G.worldW,bh=b.h*G.worldH;
+        ctx.fillStyle='rgba(255,215,0,0.15)';ctx.strokeStyle='#FFD700';ctx.lineWidth=3;
+        ctx.beginPath();ctx.roundRect(bx,by,bw,bh,6);ctx.fill();ctx.stroke();
+        ctx.fillStyle='#FFD700';ctx.font='bold 13px Nunito';ctx.textAlign='center';
+        ctx.fillText('🚪 Enter!',bx+bw/2,by-10);
+      }
+    });
+
+    ctx.restore(); // end camera transform
+
+    // Transition overlay
+    if(G.transition>0){ctx.fillStyle='rgba(0,0,0,'+G.transition+')';ctx.fillRect(0,0,W,H);}
+  }
+
+  requestAnimationFrame(draw);
+}
+draw();
+
+// click handler merged into walking system above
 
 // ── ENTER / EXIT BUILDING ────────────────────────────────
 function enterBuilding(id){
