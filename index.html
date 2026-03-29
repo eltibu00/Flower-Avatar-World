@@ -1039,7 +1039,14 @@ function refreshStyle(){const b=document.getElementById('styleBody');if(b){const
 // ── SHOP ──────────────────────────────────────────────────
 function openShop(){
   let items='';
-  ITEMS_CATALOG.forEach(item=>{const own=G.owned.includes(item.id);items+=`<div class="item-card${own?' owned':''}" style="cursor:pointer;padding:12px 8px" onclick="${own?`equipItem(ITEMS_CATALOG.find(i=>i.id==='${item.id}`))`:`buyItem(ITEMS_CATALOG.find(i=>i.id==='${item.id}'))`};renderItemGrid();showToast('${own?'Equipped':'Buying...'} ${item.name}!')"><div class="item-card-icon" style="font-size:32px">${item.icon}</div><div class="item-card-name" style="font-size:12px">${item.name}</div><div class="item-card-price" style="font-size:12px">${own?'✓ Owned':'🪙 '+item.price}</div></div>`;});
+  ITEMS_CATALOG.forEach(function(item){
+    var own=G.owned.includes(item.id);
+    var fn=own?'equipItem':'buyItem';
+    items+='<div class="item-card'+(own?' owned':'')+'" style="cursor:pointer;padding:12px 8px" onclick="'+fn+'(ITEMS_CATALOG.find(function(i){return i.id===&quot;'+item.id+'&quot;}));renderItemGrid();">'+
+      '<div class="item-card-icon" style="font-size:32px">'+item.icon+'</div>'+
+      '<div class="item-card-name" style="font-size:12px">'+item.name+'</div>'+
+      '<div class="item-card-price" style="font-size:12px">'+(own?'&#x2713; Owned':'&#x1FA99; '+item.price)+'</div></div>';
+  });
   openModal(`<div class="modal-header"><span style="font-size:24px">🛍️</span><div class="modal-title">Shop <span style="font-size:15px;opacity:.8">${G.coins} 🪙</span></div></div><button class="modal-close" onclick="closeModal()">✕</button><div class="modal-body"><div class="shop-grid">${items}</div></div>`);
 }
 
